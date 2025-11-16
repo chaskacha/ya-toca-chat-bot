@@ -1,0 +1,125 @@
+{
+  "51922824175": {
+    "waId": 51922824175,
+    "demographics": {
+      "gender": "Masculino",
+      "age": "Menos de 16",
+      "population": "Pueblo afroperuano",
+      "ethnicity": "Quechua",
+      "occupation": "Estudiante",
+      "education": "Sin instrucción"
+    },
+    "demographicsCompleted": true,
+    "cabildoCompleted": true,
+    "finalWord": "sth goes here",
+    "consent": "yes"
+  },
+  "51922824174": {
+    "waId": "51922824174",
+    "demographics": {
+      "gender": null,
+      "age": null,
+      "population": null,
+      "ethnicity": null,
+      "occupation": null,
+      "education": null
+    },
+    "demographicsCompleted": false,
+    "cabildoCompleted": false,
+    "lastCabildoName": null,
+    "stationsDone": []
+  },
+  "51922824176": {
+    "waId": "51922824176",
+    "demographics": {
+      "gender": "Masculino",
+      "age": "Menos de 16",
+      "population": "Pueblo afroperuano",
+      "ethnicity": "Quechua",
+      "occupation": "Estudiante",
+      "education": "Sin instrucción"
+    },
+    "demographicsCompleted": true,
+    "cabildoCompleted": true,
+    "lastCabildoName": "Cabildo San Miguel",
+    "stationsDone": [
+      1,
+      2,
+      3
+    ],
+    "finalWord": "lalal",
+    "consent": "yes"
+  },
+  "51922824177": {
+    "waId": "51922824177",
+    "demographics": {
+      "gender": null,
+      "age": null,
+      "population": null,
+      "ethnicity": null,
+      "occupation": null,
+      "education": null
+    },
+    "demographicsCompleted": false,
+    "cabildoCompleted": false,
+    "lastCabildoName": null,
+    "stationsDone": []
+  },
+  "79776234502": {
+    "waId": "79776234502",
+    "demographics": {
+      "gender": null,
+      "age": null,
+      "population": null,
+      "ethnicity": null,
+      "occupation": null,
+      "education": null
+    },
+    "demographicsCompleted": false,
+    "cabildoCompleted": false,
+    "lastCabildoName": null,
+    "stationsDone": []
+  },
+  "51941942036": {
+    "waId": "51941942036",
+    "demographics": {
+      "gender": "Masculino",
+      "age": "30-45",
+      "population": "Pueblo afroperuano",
+      "ethnicity": "Otro",
+      "occupation": "Estudiante",
+      "education": "Postgrado"
+    },
+    "demographicsCompleted": true,
+    "cabildoCompleted": true,
+    "lastCabildoName": "San Miguel",
+    "stationsDone": [
+      1,
+      2,
+      3
+    ],
+    "finalWord": "Disfrutar la vida",
+    "consent": "yes"
+  },
+  "51991515939": {
+    "waId": "51991515939",
+    "demographics": {
+      "gender": "Prefiero no contestar",
+      "age": "Prefiero no contestar",
+      "population": "Prefiero no contestar",
+      "ethnicity": "Prefiero no contestar",
+      "occupation": "Prefiero no contestar",
+      "education": "Prefiero no contestar"
+    },
+    "demographicsCompleted": true,
+    "cabildoCompleted": true,
+    "lastCabildoName": "Prueba :)",
+    "stationsDone": [
+      1,
+      2,
+      3
+    ],
+    "finalWord": "Nxuebxuwbcuebcbdj",
+    "consent": "yes"
+  }
+}

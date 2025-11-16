@@ -1,0 +1,35 @@
+version: "3.9"
+services:
+  ngrok:
+    image: ngrok/ngrok:latest
+    platform: linux/amd64
+    command: http app:3000  # THIS LINE IS CRITICAL
+    environment:
+      - NGROK_AUTHTOKEN=2pnzAKlpLWWIpAd3HVFgOxEJDdq_ckN9PiZdC3ygrm7h8DVc
+    depends_on:
+      - app
+    ports:
+      - "4040:4040" # Optional: exposes ngrok web interface
+    networks:
+      - ngrok-network
+  app:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NPM_CONFIG_AUDIT=false
+      - NPM_CONFIG_FUND=false
+    volumes:
+      - ./:/app
+      - node_modules:/app/node_modules
+    networks:
+      - ngrok-network
+volumes:
+  node_modules:
+networks:
+  ngrok-network:
+    driver: bridge
