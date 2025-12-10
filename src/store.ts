@@ -1,9 +1,5 @@
-import { promises as fs } from 'fs';
-import path from 'path';
-
-const DATA_DIR = path.join(process.cwd(), 'data');
-const FILE = path.join(DATA_DIR, 'profiles.json');
-const TMP  = path.join(DATA_DIR, 'profiles.json.tmp');
+// store.ts
+import IORedis from 'ioredis';
 
 export type Demographics = {
   gender: string | null;
@@ -28,75 +24,123 @@ export type Profile = {
   webCookie?: string | null;
 };
 
-type Store = Record<string, Profile>;
-let mem: Store | null = null;
+const redisUrl = process.env.REDIS_URL;
 
-async function ensureFile() {
-  try { await fs.mkdir(DATA_DIR, { recursive: true }); } catch {}
-  try { await fs.access(FILE); } catch {
-    await fs.writeFile(FILE, JSON.stringify({}, null, 2), 'utf-8');
-  }
+// Fallback in local dev if you ever run without Redis
+const inMemoryProfiles = new Map<string, Profile>();
+
+let redis: IORedis | null = null;
+if (redisUrl) {
+  redis = new IORedis(redisUrl, {
+    maxRetriesPerRequest: null,
+  });
+} else {
+  console.warn('WARNING: REDIS_URL not set, using in-memory store for profiles');
 }
 
-async function load(): Promise<Store> {
-  if (mem) return mem;
-  await ensureFile();
-  const raw = await fs.readFile(FILE, 'utf-8').catch(() => '{}');
-  mem = JSON.parse(raw || '{}') as Store;
-  return mem!;
+const PROFILE_KEY = (waId: string) => `yt:profile:${waId}`;
+const PROFILE_INDEX_KEY = 'yt:profiles:index';
+
+function defaultProfile(waId: string): Profile {
+  return {
+    waId,
+    demographics: {
+      gender: null,
+      age: null,
+      population: null,
+      ethnicity: null,
+      occupation: null,
+      education: null,
+      originRegion: null,
+      cabildoRegion: null,
+    },
+    demographicsCompleted: false,
+    cabildoCompleted: false,
+    lastCabildoName: null,
+    stationsDone: [],
+    webCookie: null,
+  };
 }
 
-async function save(store: Store) {
-  mem = store;
-  // atomic write to reduce risk of partial files
-  const payload = JSON.stringify(store, null, 2);
-  await fs.writeFile(TMP, payload, 'utf-8');
-  await fs.rename(TMP, FILE);
+// Small helper to ensure all fields exist after JSON.parse
+function hydrateProfile(waId: string, raw: any): Profile {
+  const base = defaultProfile(waId);
+  return {
+    ...base,
+    ...raw,
+    demographics: {
+      ...base.demographics,
+      ...(raw?.demographics ?? {}),
+    },
+    stationsDone: Array.isArray(raw?.stationsDone) ? raw.stationsDone : [],
+  };
 }
 
+/** Get profile for a waId, creating a default one if missing */
 export async function getProfile(waId: string): Promise<Profile> {
-  const store = await load();
-  if (!store[waId]) {
-    store[waId] = {
-      waId,
-      demographics: {
-        gender: null,
-        age: null,
-        population: null,
-        ethnicity: null,
-        occupation: null,
-        education: null,
-        originRegion: null,
-        cabildoRegion: null
-      },
-      demographicsCompleted: false,
-      cabildoCompleted: false,
-      lastCabildoName: null,
-      stationsDone: [],
-      webCookie: null
-    };
-    await save(store);
+  if (!redis) {
+    const existing = inMemoryProfiles.get(waId);
+    if (existing) return existing;
+    const fresh = defaultProfile(waId);
+    inMemoryProfiles.set(waId, fresh);
+    return fresh;
   }
-  return store[waId];
-}
 
-export async function updateProfile(waId: string, updater: (p: Profile) => void | Profile) {
-  const store = await load();
-  const current = store[waId] ?? (await getProfile(waId));
-  const maybe = updater(current);
-  store[waId] = (maybe as Profile) || current;
-  await save(store);
-}
+  const key = PROFILE_KEY(waId);
+  const json = await redis.get(key);
 
-export async function deleteProfile(waId: string) {
-  const store = await load();      // load current profiles.json into memory
-  if (store[waId]) {
-    delete store[waId];            // remove this user
-    await save(store);             // persist to disk (and update mem)
+  if (!json) {
+    const fresh = defaultProfile(waId);
+    await redis.set(key, JSON.stringify(fresh));
+    await redis.sadd(PROFILE_INDEX_KEY, waId);
+    return fresh;
+  }
+
+  try {
+    const parsed = JSON.parse(json);
+    return hydrateProfile(waId, parsed);
+  } catch {
+    // if something got corrupted, reset to default
+    const fresh = defaultProfile(waId);
+    await redis.set(key, JSON.stringify(fresh));
+    await redis.sadd(PROFILE_INDEX_KEY, waId);
+    return fresh;
   }
 }
 
+/** Mutate and save profile (like you already do) */
+export async function updateProfile(
+  waId: string,
+  mutator: (p: Profile) => void,
+): Promise<void> {
+  const p = await getProfile(waId);
+  mutator(p);
+
+  if (!redis) {
+    inMemoryProfiles.set(waId, p);
+    return;
+  }
+
+  await redis.set(PROFILE_KEY(waId), JSON.stringify(p));
+  await redis.sadd(PROFILE_INDEX_KEY, waId);
+}
+
+/** List all waIds that have a profile (used by /_dev/profiles) */
 export async function getAllWaIds(): Promise<string[]> {
-  const store = await load();
-  return Object.keys(store);
+  if (!redis) {
+    return Array.from(inMemoryProfiles.keys());
+  }
+  const ids = await redis.smembers(PROFILE_INDEX_KEY);
+  return ids;
+}
+
+/** Delete a profile (used by reset-full & "zurücksetzen") */
+export async function deleteProfile(waId: string): Promise<void> {
+  if (!redis) {
+    inMemoryProfiles.delete(waId);
+    return;
+  }
+
+  await redis.del(PROFILE_KEY(waId));
+  await redis.srem(PROFILE_INDEX_KEY, waId);
 }
