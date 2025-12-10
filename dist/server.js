@@ -4,10 +4,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
+const job_1 = require("./job");
 const express_1 = __importDefault(require("express"));
 const axios_1 = __importDefault(require("axios"));
 const crypto_1 = __importDefault(require("crypto"));
 const store_1 = require("./store");
+const sync_1 = require("./sync");
 const app = (0, express_1.default)();
 /** Capture raw body so we can verify X-Hub-Signature-256 */
 app.use(express_1.default.json({
@@ -23,6 +25,8 @@ const APP_SECRET = process.env.APP_SECRET || '';
 const API_VER = process.env.GRAPH_API_VERSION || 'v21.0';
 const PORT = Number(process.env.PORT || 3000);
 const DRY_RUN = !WABA_TOKEN || !PHONE_ID;
+// NEW: base URL of your Next.js web app (where /api/profile and /api/messages live)
+const WEB_APP_BASE_URL = (process.env.WEB_APP_BASE_URL || '').replace(/\/+$/, '');
 /* ---------------- DEV OUTBOX (see what we would send) -------------------- */
 const OUTBOX = new Map();
 function devPush(to, body) {
@@ -32,7 +36,13 @@ function devPush(to, body) {
 }
 /* ---------------- Helpers ------------------------------------------------- */
 const digitsOf = (txt = '') => (txt.match(/\d+/)?.[0] ?? '').trim(); // pulls 1 from " 1) "
-const normalize = (s = '') => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\w+ ]+/g, '').replace(/\s+/g, ' ').trim();
+const normalize = (s = '') => s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\w+ ]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 const isMenuKeyword = (t) => ['menu', 'menú', '0'].includes(t.trim().toLowerCase());
 const isHash = (t) => t.trim() === '#';
 /** Deduplicate WhatsApp message deliveries (keep 5 min) */
@@ -87,115 +97,209 @@ function verifyMetaSig(req) {
     }
 }
 async function sendText(to, lines) {
-    for (const body of lines) {
-        devPush(to, body);
-        if (DRY_RUN) {
-            console.log('[DRY-RUN] ->', to, body.replace(/\n/g, ' ↵ '));
-            continue;
-        }
-        try {
-            await axios_1.default.post(`https://graph.facebook.com/${API_VER}/${PHONE_ID}/messages`, { messaging_product: 'whatsapp', to, type: 'text', text: { body } }, { headers: { Authorization: `Bearer ${WABA_TOKEN}` } });
-        }
-        catch (err) {
-            console.error('Send error:', err?.response?.data || err?.message);
-        }
+    const body = lines.join('\n'); // or '\n\n' if you want extra spacing
+    devPush(to, body);
+    if (DRY_RUN) {
+        console.log('[DRY-RUN] ->', to, body.replace(/\n/g, ' ↵ '));
+        return;
+    }
+    try {
+        await axios_1.default.post(`https://graph.facebook.com/${API_VER}/${PHONE_ID}/messages`, {
+            messaging_product: 'whatsapp',
+            to,
+            type: 'text',
+            text: { body },
+        }, { headers: { Authorization: `Bearer ${WABA_TOKEN}` } });
+    }
+    catch (err) {
+        console.error('Send error:', err?.response?.data || err?.message);
     }
 }
-// ---------------- Static copy ------------------------------------------------
-const WELCOME_BOTH = [
-    `¡Hola! Bienvenido/a a Ya Toca
-    \n
-    Este es un espacio para decir lo que pensamos, lo que sentimos y lo que queremos para nuestro país.
-    \n
-    ¡Gracias por escribirme!
-    \n
-    ¿Qué te gustaría hacer hoy?
-    \n
-    1. Estoy participando de un Cabildo y quiero dejar mis respuestas
-    \n
-    2. Quiero dejar un mensaje sobre lo que pienso, siento o quiero para mi futuro o el del país (puede ser escrito, audio, sticker… lo que quieras)
-    \n
-    Si quieres hacernos una pregunta, puedes escribirnos a conectamos@yatoca.pe`
+function firstPendingDemoIndex(profile) {
+    const order = [
+        'gender',
+        'age',
+        'population',
+        'ethnicity',
+        'occupation',
+        'education',
+        'originRegion',
+        'cabildoRegion',
+    ];
+    const d = profile.demographics;
+    for (let i = 0; i < order.length; i++) {
+        const key = order[i];
+        if (!d[key])
+            return i;
+    }
+    return null; // all answered
+}
+/* ---------------- Static copy / constants -------------------------------- */
+// 3) list of regions for Perú
+const REGIONES_PERU = [
+    'Amazonas',
+    'Áncash',
+    'Apurímac',
+    'Arequipa',
+    'Ayacucho',
+    'Cajamarca',
+    'Callao',
+    'Cusco',
+    'Huancavelica',
+    'Huánuco',
+    'Ica',
+    'Junín',
+    'La Libertad',
+    'Lambayeque',
+    'Lima Metropolitana',
+    'Lima Provincias',
+    'Loreto',
+    'Madre de Dios',
+    'Moquegua',
+    'Pasco',
+    'Piura',
+    'Puno',
+    'San Martín',
+    'Tacna',
+    'Tumbes',
+    'Ucayali',
+    'Otro / extranjero',
 ];
+// 1 + 2) Welcome messages (no free message option)
+const WELCOME_BOTH = [
+    `¡Hola! Bienvenido/a a Ya Toca\nEste es un espacio para decir lo que pensamos, lo que sentimos y lo que queremos para nuestro país.\n
+¡Gracias por escribirme!\n
+¿Qué te gustaría hacer hoy?\n
+1. Estoy participando de un Cabildo y quiero dejar mis respuestas\n
+Si quieres hacernos una pregunta, puedes escribirnos a conectamos@yatoca.pe`
+];
+// When cabildo already completed
 const WELCOME_ONLY_2 = [
-    `¡Hola! Bienvenido/a a Ya Toca
-    \n
-Ya completaste el Cabildo 👏. Puedes dejar un mensaje libre cuando quieras.
-    \n
-2. Quiero dejar un mensaje sobre lo que pienso, siento o quiero para mi futuro o el del país (puede ser escrito, audio, sticker… lo que quieras)
-    \n
-Si quieres hacernos una pregunta, puedes escribirnos a conectamos@yatoca.pe `
+    `Ya completaste el Cabildo. Gracias por compartir. Tu voz ahora se une a la de miles de jóvenes que creen que sí podemos construir algo distinto.`
 ];
 const ASK_CABILDO = [
     `¡Genial, comencemos! ¿Cómo se llama el Cabildo en el que estás participando? Pon el nombre que tu grupo haya elegido.`
 ];
+// 3) DEMOS: add originRegion + cabildoRegion
 const DEMOS = [
     {
-        key: 'gender', q: `¿Con qué género te identificas?\n1. Masculino\n2. Femenino\n3. Otro\n4. Prefiero no contestar`,
-        options: ['Masculino', 'Femenino', 'Otro', 'Prefiero no contestar']
+        key: 'gender',
+        q: `¿Con qué género te identificas?\n1. Masculino\n2. Femenino\n3. Otro\n4. Prefiero no contestar`,
+        options: ['Masculino', 'Femenino', 'Otro', 'Prefiero no contestar'],
     },
     {
-        key: 'age', q: `¿Cuántos años tienes?\n1. Menos de 16\n2. 16-29\n3. 30-45\n4. 46 a +\n5. Prefiero no contestar`,
-        options: ['Menos de 16', '16-29', '30-45', '46 a +', 'Prefiero no contestar']
+        key: 'age',
+        q: `¿Cuántos años tienes?\n1. Menos de 16\n2. 16-29\n3. 30-45\n4. 46 a +\n5. Prefiero no contestar`,
+        options: ['Menos de 16', '16-29', '30-45', '46 a +', 'Prefiero no contestar'],
     },
     {
-        key: 'population', q: `¿Te sientes parte de alguna de estas poblaciones?\n
-        \n1. Pueblo afroperuano\n
-        \n2. Comunidad LGTBIQ+\n
-        \n3. Pueblos indígenas u originarios\n
-        \n4. Personas con discapacidad\n
-        \n5. Ninguna de las anteriores\n
-        \n6. Prefiero no contestar`,
-        options: ['Pueblo afroperuano', 'Comunidad LGTBIQ+', 'Pueblos indígenas u originarios', 'Personas con discapacidad', 'Ninguna de las anteriores', 'Prefiero no contestar']
+        key: 'population',
+        q: `¿Te sientes parte de alguna de estas poblaciones?\n1. Pueblo afroperuano\n2. Comunidad LGTBIQ+\n3. Pueblos indígenas u originarios\n4. Personas con discapacidad\n5. Ninguna de las anteriores\n6. Prefiero no contestar`,
+        options: [
+            'Pueblo afroperuano',
+            'Comunidad LGTBIQ+',
+            'Pueblos indígenas u originarios',
+            'Personas con discapacidad',
+            'Ninguna de las anteriores',
+            'Prefiero no contestar',
+        ],
     },
     {
-        key: 'ethnicity', q: `¿Con qué grupo étnico te identificas?\n1. Quechua\n2. Aimara\n3. Indígena de la Amazonía\n4. Afroperuano\n5. Blanco\n6. Mestizo\n7. Asiático o nikkei\n8. Otro\n9. Prefiero no contestar`,
-        options: ['Quechua', 'Aimara', 'Indígena de la Amazonía', 'Afroperuano', 'Blanco', 'Mestizo', 'Asiático o nikkei', 'Otro', 'Prefiero no contestar']
+        key: 'ethnicity',
+        q: `¿Con qué grupo étnico te identificas?\n1. Quechua\n2. Aimara\n3. Indígena de la Amazonía\n4. Afroperuano\n5. Blanco\n6. Mestizo\n7. Asiático o nikkei\n8. Otro\n9. Prefiero no contestar`,
+        options: [
+            'Quechua',
+            'Aimara',
+            'Indígena de la Amazonía',
+            'Afroperuano',
+            'Blanco',
+            'Mestizo',
+            'Asiático o nikkei',
+            'Otro',
+            'Prefiero no contestar',
+        ],
     },
     {
-        key: 'occupation', q: `¿Cuál es tu ocupación?\n1. Estudiante\n2. Trabajador dependiente\n3. Trabajador independiente\n4. Emprendedor\n5. Servidor público\n6. Representante comunitario\n7. Sin ocupación fija\n8. Otro\n9. Prefiero no contestar`,
-        options: ['Estudiante', 'Trabajador dependiente', 'Trabajador independiente', 'Emprendedor', 'Servidor público', 'Representante comunitario', 'Sin ocupación fija', 'Otro', 'Prefiero no contestar']
+        key: 'occupation',
+        q: `¿Cuál es tu ocupación?\n1. Estudiante\n2. Trabajador dependiente\n3. Trabajador independiente\n4. Emprendedor\n5. Servidor público\n6. Representante comunitario\n7. Sin ocupación fija\n8. Otro\n9. Prefiero no contestar`,
+        options: [
+            'Estudiante',
+            'Trabajador dependiente',
+            'Trabajador independiente',
+            'Emprendedor',
+            'Servidor público',
+            'Representante comunitario',
+            'Sin ocupación fija',
+            'Otro',
+            'Prefiero no contestar',
+        ],
     },
     {
-        key: 'education', q: `¿Cuál es tu nivel de instrucción?\n1. Sin instrucción\n2. Primaria\n3. Secundaria\n4. Superior técnica o universitaria\n5. Postgrado\n6. Otro\n7. Prefiero no contestar`,
-        options: ['Sin instrucción', 'Primaria', 'Secundaria', 'Superior técnica o universitaria', 'Postgrado', 'Otro', 'Prefiero no contestar']
-    }
+        key: 'education',
+        q: `¿Cuál es tu nivel de instrucción?\n1. Sin instrucción\n2. Primaria\n3. Secundaria\n4. Superior técnica o universitaria\n5. Postgrado\n6. Otro\n7. Prefiero no contestar`,
+        options: [
+            'Sin instrucción',
+            'Primaria',
+            'Secundaria',
+            'Superior técnica o universitaria',
+            'Postgrado',
+            'Otro',
+            'Prefiero no contestar',
+        ],
+    },
+    {
+        key: 'originRegion',
+        q: `¿De qué región eres?\n${REGIONES_PERU.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
+        options: [...REGIONES_PERU],
+    },
+    {
+        key: 'cabildoRegion',
+        q: `¿En qué región estás haciendo este cabildo?\n${REGIONES_PERU.map((r, i) => `${i + 1}. ${r}`).join('\n')}`,
+        options: [...REGIONES_PERU],
+    },
 ];
 const stationPrompts = {
     1: 'Cuéntanos cómo te sentiste después de la conversación. Puedes hacerlo como quieras: texto, audio, sticker, lo que mejor te salga. Habla como si se lo contaras a un/a amigo/a. Aquí van unas preguntas para inspirarte:\n¿Qué te choca o te frustra de vivir en este país?\n¿Y qué te da esperanza o te hace sentir que sí se puede?\nPara terminar, marca #.',
     2: 'Cuéntanos cómo te sentiste después de la dinámica. Puedes hacerlo como quieras: texto, audio, sticker, lo que mejor te salga. Habla como si se lo contaras a un/a amigo/a. Aquí van unas preguntas para inspirarte:\n¿Crees que el lugar y las condiciones en las que nacimos marcan lo que podemos lograr?\n¿Cómo podemos convivir y construir con gente que piensa distinto?\nPara terminar, marca #.',
-    3: 'Cuéntanos cómo te sentiste después de la dinámica. Puedes hacerlo como quieras: texto, audio, sticker, lo que mejor te salga. Habla como si se lo contaras a un/a amigo/a. Aquí van unas preguntas para inspirarte:\nSi fueras presidente/a, ¿qué harías para no decepcionar a tu generación?\n¿Cuáles serían tus prioridades?\nPara terminar, marca #.'
+    3: 'Cuéntanos cómo te sentiste después de la dinámica. Puedes hacerlo como quieras: texto, audio, sticker, lo que mejor te salga. Habla como si se lo contaras a un/a amigo/a. Aquí van unas preguntas para inspirarte:\nSi fueras presidente/a, ¿qué harías para no decepcionar a tu generación?\n¿Cuáles serían tus prioridades?\nPara terminar, marca #.',
 };
-const afterStation = [
-    '¿Qué quieres hacer ahora?',
-    '1.- Quiero seguir con la otra estación',
-    '2.- Quiero salir'
-];
+const afterStation = ['¿Qué quieres hacer ahora?', '1.- Quiero seguir con la otra estación', '2.- Quiero salir'];
 const finalEarlyExit = [
-    'Gracias por tu buena vibra y por hablar con sinceridad. Tu voz ahora se une a la de miles de jóvenes en todo el Perú.'
+    'Gracias por tu buena vibra y por hablar con sinceridad. Tu voz ahora se une a la de miles de jóvenes en todo el Perú.',
 ];
 // New: end-of-cabildo sequence
 const endCabildoWord = [
     '¡Lo logramos! Llegamos al final. 🙌',
-    'Gracias por tu buena vibra y por hablar con sinceridad. Tu voz ahora se une a la de miles de jóvenes en todo el Perú.',
-    'YA TOCA… (completa la frase con una palabra).'
+    'Gracias por tu buena vibra y por hablar con sinceridad. Tu voz ahora se une a la de miles de jóvenes en todo el Perú.\n',
+    'Mensaje final',
+    'YA TOCA... (completa la frase con una palabra).',
 ];
+// 4) Consent text with single option
 const consentAsk = [
-    'Para finalizar, queremos que sepas que no compartiremos tu información personal ni tus respuestas de manera individual, pero sí queremos analizar las voces de todos los participantes para saber qué toca para los jóvenes en el Perú. ¿Autorizas que Ya Toca utilice tus respuestas de manera anónima?',
+    'He leído y acepto las condiciones de tratamiento de mis datos personales, conforme a la Ley N 29733.',
     '1. Sí, acepto',
-    '2. No acepto'
 ];
 const endCabildoThanks = [
-    '¡Gracias! Eso es todo. Encuéntranos en nuestras diferentes redes como yatoca.pe, síguenos y entérate de todo lo que se viene!'
+    '¡Gracias! Eso es todo. Encuéntranos en nuestras diferentes redes como yatoca.pe, síguenos y entérate de todo lo que se viene!',
 ];
+// There is NO free-message ("vent") mode anymore, but we keep these
+// just in case you want to re-enable in the future.
+// For now they are unused.
 const ventIntro = [
-    '¡Este es tu espacio para soltar lo que piensas, sueñas o quieres cambiar! Escríbelo, grábalo, manda un sticker… como quieras. Aquí no hay reglas, solo tu voz. Para terminar, marca #.'
+    '¡Este es tu espacio para soltar lo que piensas, sueñas o quieres cambiar! Escríbelo, grábalo, manda un sticker… como quieras. Aquí no hay reglas, solo tu voz. Para terminar, marca #.',
 ];
 const ventThanks = [
-    'Gracias por compartir. Tu voz ahora se une a la de miles de jóvenes que creen que sí podemos construir algo distinto.'
+    'Gracias por compartir. Tu voz ahora se une a la de miles de jóvenes que creen que sí podemos construir algo distinto.',
 ];
 function stationMenu(remaining) {
-    const lines = ['¡Gracias por tus respuestas! Ahora sí, empecemos el Cabildo.', '¿En qué número de estación te encuentras?'];
+    // If the user still has the 3 stations available, it's their first station.
+    const isFirstStation = remaining.length === 3;
+    const lines = [
+        isFirstStation
+            ? '¡Gracias por tus respuestas! Ahora sí, empecemos el Cabildo.'
+            : '¡Perfecto, seguimos!',
+        '¿En qué número de estación te encuentras?',
+    ];
     if (remaining.includes(1))
         lines.push('1. Estación 1: La catarsis');
     if (remaining.includes(2))
@@ -231,17 +335,33 @@ function getSession(waId) {
     armTimer(s);
     return s;
 }
+function endSession(s) {
+    if (s.timer) {
+        clearTimeout(s.timer);
+        s.timer = undefined;
+    }
+    sessions.delete(s.waId);
+    OUTBOX.delete(s.waId);
+    webProfileCookies.delete(s.waId);
+}
 function armTimer(s) {
     if (s.timer)
         clearTimeout(s.timer);
     s.timer = setTimeout(async () => {
-        await sendText(s.waId, ['Cerramos la conversación por inactividad. Si deseas continuar, escribe cualquier mensaje.']);
-        sessions.delete(s.waId);
+        // Ensure this is still the active session for this waId
+        const current = sessions.get(s.waId);
+        if (!current || current !== s) {
+            return; // old timer from a previous session, ignore
+        }
+        await sendText(s.waId, [
+            'Cerramos la conversación por inactividad. Si deseas continuar, escribe cualquier mensaje.'
+        ]);
+        endSession(s);
     }, INACTIVITY_MS);
 }
 function remainingStationsUnion(s, p) {
     const done = new Set([...(p.stationsDone ?? []), ...s.stationsDone]);
-    return [1, 2, 3].filter(n => !done.has(n));
+    return [1, 2, 3].filter((n) => !done.has(n));
 }
 /* ---------------- Option matching for demographics ------------------------ */
 function pickFromOptions(input, options) {
@@ -249,13 +369,20 @@ function pickFromOptions(input, options) {
     if (!Number.isNaN(num) && num >= 1 && num <= options.length)
         return options[num - 1];
     const normInput = normalize(input);
-    const norms = options.map(o => normalize(o));
+    const norms = options.map((o) => normalize(o));
     const alt = ['prefiero no responder', 'prefiero no contestar', 'no respondo', 'no contestar'];
     if (alt.includes(normInput))
-        return options.find(o => normalize(o) === normalize('Prefiero no contestar')) || options[options.length - 1];
+        return (options.find((o) => normalize(o) === normalize('Prefiero no contestar')) || options[options.length - 1]);
     const idx = norms.indexOf(normInput);
     return idx >= 0 ? options[idx] : null;
 }
+/* ---------------- WEB APP SYNC HELPERS ----------------------------------- */
+/**
+ * We keep the `yt_profile=...` cookie returned by /api/profile
+ * so we can send it back to /api/messages, allowing that route
+ * to resolve `participantId` exactly as in the web app.
+ */
+const webProfileCookies = new Map(); // waId -> "yt_profile=..."
 /* ---------------- Webhook verification ----------------------------------- */
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -280,18 +407,42 @@ app.post('/webhook', async (req, res) => {
     // 1) Mark as read (optional)
     if (!DRY_RUN) {
         console.log(`Marking ${from} as read`);
-        await axios_1.default.post(`https://graph.facebook.com/v21.0/${PHONE_ID}/messages`, { messaging_product: 'whatsapp', status: 'read', message_id: mid }, { headers: { Authorization: `Bearer ${WABA_TOKEN}` } }).catch(() => { });
+        axios_1.default.post(`https://graph.facebook.com/v24.0/${PHONE_ID}/messages`, { messaging_product: 'whatsapp', status: 'read', message_id: mid }, { headers: { Authorization: `Bearer ${WABA_TOKEN}` } }).catch(() => { });
     }
     // Deduplicate deliveries
     if (!firstTime(msg.id))
         return;
-    const type = msg.type;
-    const text = type === 'text' ? (msg.text?.body || '') :
-        type === 'button' ? (msg.button?.text || '') :
-            type === 'interactive' ? (msg.interactive?.list_reply?.title || msg.interactive?.button_reply?.title || '') :
-                '[contenido]';
+    let type = msg.type;
+    let text;
+    if (type === 'audio') {
+        text = '[audio]'; // temporary placeholder
+    }
+    else {
+        // existing text / button / interactive logic
+        text =
+            type === 'text'
+                ? msg.text?.body || ''
+                : type === 'button'
+                    ? msg.button?.text || ''
+                    : type === 'interactive'
+                        ? msg.interactive?.list_reply?.title ||
+                            msg.interactive?.button_reply?.title ||
+                            ''
+                        : '[contenido]';
+    }
     const s = getSession(from);
     const profile = await (0, store_1.getProfile)(from);
+    if (profile.webCookie && !webProfileCookies.has(from)) {
+        webProfileCookies.set(from, profile.webCookie);
+    }
+    if (text.trim() === 'zurücksetzen') {
+        endSession(s);
+        await (0, store_1.deleteProfile)(from);
+        await sendText(from, [
+            'Tu estado ha sido restablecido. Escribe cualquier mensaje para empezar de cero.'
+        ]);
+        return;
+    }
     // hydrate session from profile
     if (!s.cabildoName && profile.lastCabildoName)
         s.cabildoName = profile.lastCabildoName;
@@ -316,41 +467,75 @@ app.post('/webhook', async (req, res) => {
             break;
         case 'menu': {
             const d = digitsOf(text);
+            // If Cabildo is fully completed, 1 does nothing except remind them.
             if (profile.cabildoCompleted) {
-                if (d === '2') {
-                    s.state = 'vent_input';
-                    await sendText(from, ventIntro);
-                }
-                else if (d === '1') {
-                    await sendText(from, ['Ya completaste el Cabildo. Elige la opción 2 para dejar un mensaje libre.']);
+                if (d === '1') {
+                    await sendText(from, [
+                        'Ya completaste el Cabildo. Gracias por compartir. Tu voz ahora se une a la de miles de jóvenes que creen que sí podemos construir algo distinto.'
+                    ]);
                 }
                 else {
-                    await sendText(from, ['Elige la opción 2 para dejar un mensaje libre.']);
+                    await sendText(from, [
+                        'Ya completaste el Cabildo. Gracias por compartir. Tu voz ahora se une a la de miles de jóvenes que creen que sí podemos construir algo distinto.'
+                    ]);
                 }
                 break;
             }
-            if (d === '1') {
-                if (profile.demographicsCompleted && (profile.lastCabildoName || s.cabildoName)) {
-                    s.state = 'station_menu';
-                    await sendText(from, stationMenu(remainingStationsUnion(s, profile)));
+            // For now, we only have option 1 in the menu
+            if (d !== '1') {
+                await sendText(from, [
+                    'Por favor elige la opción 1 para continuar con el Cabildo.'
+                ]);
+                break;
+            }
+            // ---- User chose "1. Estoy participando de un Cabildo..." ----
+            const hasCabildoName = !!(profile.lastCabildoName || s.cabildoName);
+            // 1) No cabildo name yet → ask it
+            if (!hasCabildoName) {
+                s.state = 'ask_cabildo_name';
+                await sendText(from, ASK_CABILDO);
+                break;
+            }
+            // 2) Cabildo name present, demographics not completed → go to first missing demo
+            if (!profile.demographicsCompleted) {
+                const idx = firstPendingDemoIndex(profile);
+                if (idx !== null) {
+                    s.state = `demographics_${idx}`;
+                    await sendText(from, [DEMOS[idx].q]);
+                    break;
                 }
                 else {
-                    s.state = 'ask_cabildo_name';
-                    await sendText(from, ASK_CABILDO);
+                    // safety: mark completed if everything is filled
+                    await (0, store_1.updateProfile)(from, (p) => {
+                        p.demographicsCompleted = true;
+                    });
+                    profile.demographicsCompleted = true;
                 }
             }
-            else if (d === '2') {
-                s.state = 'vent_input';
-                await sendText(from, ventIntro);
+            // 3) Demographics done: decide between stations / final word / consent
+            const remain = remainingStationsUnion(s, profile);
+            if (remain.length > 0) {
+                // some stations still pending
+                s.state = 'station_menu';
+                await sendText(from, stationMenu(remain));
+            }
+            else if (!profile.finalWord) {
+                // all stations done, but no final "YA TOCA..." yet
+                s.state = 'post_all_stations_phrase';
+                await sendText(from, endCabildoWord);
             }
             else {
-                await sendText(from, ['Por favor elige: 1 (Cabildo) o 2 (Mensaje libre).']);
+                // all stations + final word, but consent not answered → go back to consent
+                s.state = 'consent';
+                await sendText(from, consentAsk);
             }
             break;
         }
         case 'ask_cabildo_name': {
             s.cabildoName = text.trim();
-            await (0, store_1.updateProfile)(from, p => { p.lastCabildoName = s.cabildoName; });
+            await (0, store_1.updateProfile)(from, (p) => {
+                p.lastCabildoName = s.cabildoName;
+            });
             if (profile.demographicsCompleted) {
                 s.state = 'station_menu';
                 await sendText(from, stationMenu(remainingStationsUnion(s, profile)));
@@ -366,24 +551,41 @@ app.post('/webhook', async (req, res) => {
         case 'demographics_2':
         case 'demographics_3':
         case 'demographics_4':
-        case 'demographics_5': {
+        case 'demographics_5':
+        case 'demographics_6':
+        case 'demographics_7': {
             const idx = Number(s.state.split('_')[1]);
             const demo = DEMOS[idx];
             const picked = pickFromOptions(text, demo.options);
             if (!picked) {
-                await sendText(from, ['No te entendí. Por favor elige una opción válida (número o texto).', demo.q]);
+                await sendText(from, ['Por favor elige una opción válida (número o texto).', demo.q]);
                 break;
             }
-            await (0, store_1.updateProfile)(from, p => { p.demographics[demo.key] = picked; });
+            await (0, store_1.updateProfile)(from, (p) => {
+                p.demographics[demo.key] = picked;
+            });
             const next = idx + 1;
             if (next < DEMOS.length) {
                 s.state = `demographics_${next}`;
                 await sendText(from, [DEMOS[next].q]);
             }
             else {
-                await (0, store_1.updateProfile)(from, p => { p.demographicsCompleted = true; });
+                await (0, store_1.updateProfile)(from, (p) => {
+                    p.demographicsCompleted = true;
+                });
+                // after last demo: sync profile to web app
+                const fresh = await (0, store_1.getProfile)(from);
                 s.state = 'station_menu';
-                await sendText(from, stationMenu(remainingStationsUnion(s, profile)));
+                await sendText(from, stationMenu(remainingStationsUnion(s, fresh)));
+                console.log('Enqueued sync profile');
+                await job_1.backgroundQueue.add('sync-profile', {
+                    kind: 'sync-profile',
+                    waId: from,
+                    cabildoName: s.cabildoName,
+                });
+                s.state = 'station_menu';
+                await sendText(from, stationMenu(remainingStationsUnion(s, fresh)));
+                await (0, sync_1.syncProfileToWeb)(from, fresh, s.cabildoName);
             }
             break;
         }
@@ -397,7 +599,10 @@ app.post('/webhook', async (req, res) => {
                 await sendText(from, [stationPrompts[s.currentStation]]);
             }
             else {
-                await sendText(from, stationMenu(remain).concat(['(Responde con 1, 2 o 3)']));
+                await sendText(from, [
+                    'Por favor elige una opción válida (número o texto).',
+                    ...stationMenu(remain),
+                ]);
             }
             break;
         }
@@ -405,19 +610,49 @@ app.post('/webhook', async (req, res) => {
             if (isHash(text)) {
                 if (s.currentStation && !s.stationsDone.includes(s.currentStation)) {
                     s.stationsDone.push(s.currentStation);
-                    await (0, store_1.updateProfile)(from, p => {
+                    await (0, store_1.updateProfile)(from, (p) => {
                         const set = new Set([...(p.stationsDone ?? []), s.currentStation]);
                         p.stationsDone = Array.from(set).sort();
+                        // keep local profile object in sync for remainingStationsUnion
+                        profile.stationsDone = p.stationsDone;
                     });
                 }
                 s.currentStation = null;
                 s.messageBuffer = [];
-                s.state = 'after_station';
-                await sendText(from, afterStation);
+                // 🔴 NEW: check if there are any stations left
+                const remain = remainingStationsUnion(s, profile);
+                if (remain.length === 0) {
+                    // ✅ All stations completed → go straight to final phrase
+                    s.state = 'post_all_stations_phrase';
+                    await sendText(from, endCabildoWord);
+                }
+                else {
+                    // ⏭ Still stations left → ask what they want to do
+                    s.state = 'after_station';
+                    await sendText(from, afterStation);
+                }
             }
             else {
+                // Sync each text chunk to web app as a station message
+                if (s.currentStation) {
+                    const stationType = s.currentStation === 1
+                        ? 'station1'
+                        : s.currentStation === 2
+                            ? 'station2'
+                            : 'station3';
+                    // enqueue instead of calling API directly
+                    await job_1.backgroundQueue.add('sync-message', {
+                        kind: 'sync-message',
+                        waId: from,
+                        type: stationType,
+                        msgType: msg.type === 'audio' ? 'audio' : 'text',
+                        text: msg.type === 'audio' ? undefined : text,
+                        mediaId: msg.type === 'audio' ? msg.audio?.id : undefined,
+                    });
+                }
                 s.messageBuffer.push({ at: new Date().toISOString(), type, text });
                 await sendText(from, ['Gracias. Cuando termines, marca #.']);
+                break;
             }
             break;
         }
@@ -436,7 +671,7 @@ app.post('/webhook', async (req, res) => {
             }
             else if (d === '2') {
                 await sendText(from, finalEarlyExit);
-                sessions.delete(from);
+                endSession(s); // 👈 instead of sessions.delete(from)
             }
             else {
                 await sendText(from, ['Elige 1 (seguir) o 2 (salir).']);
@@ -445,30 +680,41 @@ app.post('/webhook', async (req, res) => {
         }
         case 'post_all_stations_phrase': {
             const word = text.trim();
-            await (0, store_1.updateProfile)(from, p => { p.finalWord = word; });
+            await (0, store_1.updateProfile)(from, (p) => {
+                p.finalWord = word;
+            });
+            console.log('Enqueued final phrase');
+            // enqueue sync of final phrase
+            await job_1.backgroundQueue.add('sync-message', {
+                kind: 'sync-message',
+                waId: from,
+                type: 'final',
+                msgType: 'text',
+                text: word,
+            });
             s.state = 'consent';
             await sendText(from, consentAsk);
             break;
         }
         case 'consent': {
             const d = digitsOf(text);
-            if (d === '1' || d === '2') {
-                await (0, store_1.updateProfile)(from, p => {
+            if (d === '1') {
+                await (0, store_1.updateProfile)(from, (p) => {
                     p.cabildoCompleted = true;
-                    p.consent = d === '1' ? 'yes' : 'no';
+                    p.consent = 'yes'; // only option now
                 });
                 await sendText(from, endCabildoThanks);
-                sessions.delete(from);
+                endSession(s); // 👈
             }
             else {
-                await sendText(from, ['Por favor elige 1 (Sí, acepto) o 2 (No acepto).']);
+                await sendText(from, ['Por favor elige 1 (Sí, acepto).']);
             }
             break;
         }
         case 'vent_input': {
             if (isHash(text)) {
                 await sendText(from, ventThanks);
-                sessions.delete(from);
+                endSession(s); // 👈
             }
             else {
                 await sendText(from, ['Gracias. Cuando termines, marca #.']);
@@ -497,6 +743,13 @@ app.get('/_dev/profiles', async (_req, res) => {
 app.post('/_dev/reset/:waId', (req, res) => {
     sessions.delete(req.params.waId);
     OUTBOX.delete(req.params.waId);
+    res.json({ ok: true });
+});
+app.post('/_dev/reset-full/:waId', async (req, res) => {
+    sessions.delete(req.params.waId);
+    OUTBOX.delete(req.params.waId);
+    (0, store_1.deleteProfile)(req.params.waId);
+    webProfileCookies.delete(req.params.waId);
     res.json({ ok: true });
 });
 /** Show the public webhook URL (env or ngrok discovery) */

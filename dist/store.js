@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getProfile = getProfile;
 exports.updateProfile = updateProfile;
+exports.deleteProfile = deleteProfile;
 exports.getAllWaIds = getAllWaIds;
 const fs_1 = require("fs");
 const path_1 = __importDefault(require("path"));
@@ -44,11 +45,21 @@ async function getProfile(waId) {
     if (!store[waId]) {
         store[waId] = {
             waId,
-            demographics: { gender: null, age: null, population: null, ethnicity: null, occupation: null, education: null },
+            demographics: {
+                gender: null,
+                age: null,
+                population: null,
+                ethnicity: null,
+                occupation: null,
+                education: null,
+                originRegion: null,
+                cabildoRegion: null
+            },
             demographicsCompleted: false,
             cabildoCompleted: false,
             lastCabildoName: null,
-            stationsDone: []
+            stationsDone: [],
+            webCookie: null
         };
         await save(store);
     }
@@ -60,6 +71,13 @@ async function updateProfile(waId, updater) {
     const maybe = updater(current);
     store[waId] = maybe || current;
     await save(store);
+}
+async function deleteProfile(waId) {
+    const store = await load(); // load current profiles.json into memory
+    if (store[waId]) {
+        delete store[waId]; // remove this user
+        await save(store); // persist to disk (and update mem)
+    }
 }
 async function getAllWaIds() {
     const store = await load();

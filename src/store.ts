@@ -12,6 +12,8 @@ export type Demographics = {
   ethnicity: string | null;
   occupation: string | null;
   education: string | null;
+  originRegion: string | null;
+  cabildoRegion: string | null;
 };
 
 export type Profile = {
@@ -23,6 +25,7 @@ export type Profile = {
   finalWord?: string;
   lastCabildoName?: string | null;
   stationsDone?: number[]; // 1..3
+  webCookie?: string | null;
 };
 
 type Store = Record<string, Profile>;
@@ -56,11 +59,21 @@ export async function getProfile(waId: string): Promise<Profile> {
   if (!store[waId]) {
     store[waId] = {
       waId,
-      demographics: { gender: null, age: null, population: null, ethnicity: null, occupation: null, education: null },
+      demographics: {
+        gender: null,
+        age: null,
+        population: null,
+        ethnicity: null,
+        occupation: null,
+        education: null,
+        originRegion: null,
+        cabildoRegion: null
+      },
       demographicsCompleted: false,
       cabildoCompleted: false,
       lastCabildoName: null,
-      stationsDone: []
+      stationsDone: [],
+      webCookie: null
     };
     await save(store);
   }
@@ -73,6 +86,14 @@ export async function updateProfile(waId: string, updater: (p: Profile) => void 
   const maybe = updater(current);
   store[waId] = (maybe as Profile) || current;
   await save(store);
+}
+
+export async function deleteProfile(waId: string) {
+  const store = await load();      // load current profiles.json into memory
+  if (store[waId]) {
+    delete store[waId];            // remove this user
+    await save(store);             // persist to disk (and update mem)
+  }
 }
 
 export async function getAllWaIds(): Promise<string[]> {

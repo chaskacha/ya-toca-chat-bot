@@ -1,21 +1,17 @@
-FROM node:20-alpine AS deps
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
-
 FROM node:20-alpine
+
 WORKDIR /app
-ENV NODE_ENV=production
-COPY --from=deps /app/node_modules ./node_modules
+
+# copy package files
 COPY package*.json ./
-COPY dist ./dist
-EXPOSE 3000
-CMD ["node", "dist/server.js"]
+
+# Install ALL dependencies (including dev)
+RUN npm install --include=dev
+
+# copy source code
+COPY . .
+
+# Build TypeScript (dist/)
+RUN npm run build || true
+
+CMD ["npm", "run", "dev"]
