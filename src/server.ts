@@ -424,6 +424,7 @@ function endSession(s: Session) {
 }
 function armTimer(s: Session) {
     if (s.timer) clearTimeout(s.timer);
+
     s.timer = setTimeout(async () => {
         // Ensure this is still the active session for this waId
         const current = sessions.get(s.waId);
@@ -431,12 +432,22 @@ function armTimer(s: Session) {
             return; // old timer from a previous session, ignore
         }
 
+        // 👇 NEW: check if Cabildo is already completed
+        const profile = await getProfile(s.waId);
+        if (profile.cabildoCompleted) {
+            // User ya terminó el Cabildo → cerramos la sesión en silencio
+            endSession(s);
+            return;
+        }
+
+        // Only send inactivity message if Cabildo is NOT completed
         await sendText(s.waId, [
-            'Cerramos la conversación por inactividad. Si deseas continuar, escribe cualquier mensaje.'
+            'Cerramos la conversación por inactividad. Si deseas continuar, escribe cualquier mensaje.',
         ]);
         endSession(s);
     }, INACTIVITY_MS);
 }
+
 function remainingStationsUnion(s: Session, p: Profile) {
     const done = new Set<number>([...(p.stationsDone ?? []), ...s.stationsDone]);
     return [1, 2, 3].filter((n) => !done.has(n));
