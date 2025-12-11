@@ -1,3 +1,4 @@
+// dashboard.ts
 import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { ExpressAdapter } from '@bull-board/express';
@@ -15,9 +16,14 @@ const queue = new Queue('ya-toca-bg', { connection });
 
 createBullBoard({
   queues: [new BullMQAdapter(queue)],
-  serverAdapter
+  serverAdapter,
 });
 
 app.use('/admin/queues', serverAdapter.getRouter());
 
-app.listen(3005, () => console.log("BullMQ Dashboard on http://localhost:3005/admin/queues"));
+// 🔴 IMPORTANT: use process.env.PORT for DigitalOcean
+const PORT = Number(process.env.PORT || 3005);
+
+app.listen(PORT, () => {
+  console.log(`BullMQ Dashboard on :${PORT}/admin/queues`);
+});
