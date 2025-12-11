@@ -507,8 +507,6 @@ app.post('/webhook', async (req: any, res: Response) => {
 
     // Deduplicate deliveries across ALL app instances
     if (!(await firstTimeGlobal(mid))) {
-        // we still mark as read above (that’s ok), but we do not
-        // create sessions or send any reply again
         return;
     }
 
