@@ -329,9 +329,9 @@ const endCabildoThanks = [
 // There is NO free-message ("vent") mode anymore, but we keep these
 // just in case you want to re-enable in the future.
 // For now they are unused.
-const ventIntro = [
-    '¡Este es tu espacio para soltar lo que piensas, sueñas o quieres cambiar! Escríbelo, grábalo, manda un sticker… como quieras. Aquí no hay reglas, solo tu voz. Para terminar, marca #.',
-];
+// const ventIntro = [
+//     '¡Este es tu espacio para soltar lo que piensas, sueñas o quieres cambiar! Escríbelo, grábalo, manda un sticker… como quieras. Aquí no hay reglas, solo tu voz. Para terminar, marca #.',
+// ];
 const ventThanks = [
     'Gracias por compartir. Tu voz ahora se une a la de miles de jóvenes que creen que sí podemos construir algo distinto.',
 ];
