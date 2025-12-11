@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import IORedis from 'ioredis';
 import { backgroundQueue } from './job';
 import express, { Request, Response } from 'express';
 import axios from 'axios';
@@ -50,14 +51,33 @@ const isMenuKeyword = (t: string) => ['menu', 'menú', '0'].includes(t.trim().to
 const isHash = (t: string) => t.trim() === '#';
 
 /** Deduplicate WhatsApp message deliveries (keep 5 min) */
+// Local in-process dedupe (for dev without Redis)
 const seen = new Set<string>();
-function firstTime(id: string | undefined) {
+
+// Optional: Redis-based dedupe so multiple web instances don't double-handle messages
+const dedupeRedis = process.env.REDIS_URL
+    ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
+    : null;
+
+// Keep for local dev, but prefer Redis when available
+async function firstTimeGlobal(id: string | undefined): Promise<boolean> {
     if (!id) return true;
+
+    // If we have Redis, use a distributed key
+    if (dedupeRedis) {
+        const key = `yt:seen:${id}`;
+        // SET key "1" with 5-minute TTL, only if key does not exist
+        const res = await dedupeRedis.set(key, '1', 'EX', 60 * 5, 'NX');
+        return res === 'OK'; // OK means *we* were the first
+    }
+
+    // Fallback: old in-memory set (single process only)
     if (seen.has(id)) return false;
     seen.add(id);
     setTimeout(() => seen.delete(id), 5 * 60 * 1000);
     return true;
 }
+
 
 /** Resolve public base URL (env or ngrok) for convenience */
 async function resolvePublicBaseUrl(): Promise<string | null> {
@@ -476,8 +496,11 @@ app.post('/webhook', async (req: any, res: Response) => {
         ).catch(() => { /* ignore */ });
     }
 
-    // Deduplicate deliveries
-    if (!firstTime(msg.id)) return;
+    // Deduplicate deliveries across ALL app instances
+    if (!(await firstTimeGlobal(msg.id))) {
+        console.log('Duplicate message, ignoring', msg.id);
+        return;
+    }
 
     let type: string = msg.type;
     let text: string;

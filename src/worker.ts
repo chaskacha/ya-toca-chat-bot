@@ -50,4 +50,4 @@ new Worker(
   { connection }
 );
 
-console.log('Background worker v7 ready');
+console.log('Background worker v8 ready');

@@ -23,6 +23,7 @@ if (redisUrl) {
       },
     },
   });
+  console.log('Queue client v1 ready');
 } else {
   console.warn('WARNING: REDIS_URL not set, backgroundQueue is disabled');
   backgroundQueue = {
