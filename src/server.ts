@@ -26,9 +26,6 @@ const API_VER = process.env.GRAPH_API_VERSION || 'v21.0';
 const PORT = Number(process.env.PORT || 3000);
 const DRY_RUN = !WABA_TOKEN || !PHONE_ID;
 
-// NEW: base URL of your Next.js web app (where /api/profile and /api/messages live)
-const WEB_APP_BASE_URL = (process.env.WEB_APP_BASE_URL || '').replace(/\/+$/, '');
-
 /* ---------------- DEV OUTBOX (see what we would send) -------------------- */
 const OUTBOX = new Map<string, string[]>();
 function devPush(to: string, body: string) {
