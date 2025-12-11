@@ -51,32 +51,39 @@ const isMenuKeyword = (t: string) => ['menu', 'menú', '0'].includes(t.trim().to
 const isHash = (t: string) => t.trim() === '#';
 
 /** Deduplicate WhatsApp message deliveries (keep 5 min) */
-// Local in-process dedupe (for dev without Redis)
-const seen = new Set<string>();
+// ---------- GLOBAL MESSAGE DEDUPE (across all app instances) -------------
+const localSeen = new Set<string>();
 
-// Optional: Redis-based dedupe so multiple web instances don't double-handle messages
 const dedupeRedis = process.env.REDIS_URL
     ? new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null })
     : null;
 
-// Keep for local dev, but prefer Redis when available
 async function firstTimeGlobal(id: string | undefined): Promise<boolean> {
     if (!id) return true;
 
-    // If we have Redis, use a distributed key
+    // Prefer Redis when available (shared between all containers)
     if (dedupeRedis) {
         const key = `yt:seen:${id}`;
-        // SET key "1" with 5-minute TTL, only if key does not exist
+
+        // SET key "1" with TTL 5 min, only if it does not exist
         const res = await dedupeRedis.set(key, '1', 'EX', 60 * 5, 'NX');
-        return res === 'OK'; // OK means *we* were the first
+        const first = res === 'OK';
+        if (!first) {
+            console.log('[dedupe] duplicate from other instance, ignoring', id);
+        }
+        return first;
     }
 
-    // Fallback: old in-memory set (single process only)
-    if (seen.has(id)) return false;
-    seen.add(id);
-    setTimeout(() => seen.delete(id), 5 * 60 * 1000);
+    // Fallback: local set, only works for single-process dev
+    if (localSeen.has(id)) {
+        console.log('[dedupe] duplicate in same instance, ignoring', id);
+        return false;
+    }
+    localSeen.add(id);
+    setTimeout(() => localSeen.delete(id), 5 * 60 * 1000);
     return true;
 }
+
 
 
 /** Resolve public base URL (env or ngrok) for convenience */
@@ -485,6 +492,8 @@ app.post('/webhook', async (req: any, res: Response) => {
 
     const from = msg.from; // customer's wa-id (E.164 phone)
     const mid = msg.id; // message id
+    console.log('[webhook] incoming', mid, 'from', from, 'type:', msg.type);
+
 
     // 1) Mark as read (optional)
     if (!DRY_RUN) {
@@ -497,8 +506,9 @@ app.post('/webhook', async (req: any, res: Response) => {
     }
 
     // Deduplicate deliveries across ALL app instances
-    if (!(await firstTimeGlobal(msg.id))) {
-        console.log('Duplicate message, ignoring', msg.id);
+    if (!(await firstTimeGlobal(mid))) {
+        // we still mark as read above (that’s ok), but we do not
+        // create sessions or send any reply again
         return;
     }
 
