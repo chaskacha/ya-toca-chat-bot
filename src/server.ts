@@ -101,6 +101,31 @@ async function resolvePublicBaseUrl(): Promise<string | null> {
     return null;
 }
 
+async function finalizeStationIfNeeded(s: Session) {
+    if (s.state !== "station_input") return;
+    if (!s.currentStation) return;
+
+    // Only finalize if they actually sent something in this station
+    // (you can remove this guard if you want to finalize even with empty input)
+    if (!s.messageBuffer || s.messageBuffer.length === 0) return;
+
+    const station = s.currentStation;
+
+    // Mark station as done exactly like '#'
+    if (!s.stationsDone.includes(station)) {
+        s.stationsDone.push(station);
+    }
+
+    await updateProfile(s.waId, (p) => {
+        const set = new Set<number>([...(p.stationsDone ?? []), station]);
+        p.stationsDone = Array.from(set).sort();
+    });
+
+    // Clean local state (optional since session ends)
+    s.currentStation = null;
+    s.messageBuffer = [];
+}
+
 /** Optional: verify Meta signature when APP_SECRET is present */
 function verifyMetaSig(req: any): boolean {
     if (!APP_SECRET) return true; // disabled
@@ -421,29 +446,28 @@ function endSession(s: Session) {
 }
 function armTimer(s: Session) {
     if (s.timer) clearTimeout(s.timer);
-
+  
     s.timer = setTimeout(async () => {
-        // Ensure this is still the active session for this waId
-        const current = sessions.get(s.waId);
-        if (!current || current !== s) {
-            return; // old timer from a previous session, ignore
-        }
-
-        // 👇 NEW: check if Cabildo is already completed
-        const profile = await getProfile(s.waId);
-        if (profile.cabildoCompleted) {
-            // User ya terminó el Cabildo → cerramos la sesión en silencio
-            endSession(s);
-            return;
-        }
-
-        // Only send inactivity message if Cabildo is NOT completed
-        await sendText(s.waId, [
-            'Cerramos la conversación por inactividad. Si deseas continuar, escribe cualquier mensaje.',
-        ]);
+      const current = sessions.get(s.waId);
+      if (!current || current !== s) return;
+  
+      const profile = await getProfile(s.waId);
+  
+      // ✅ NEW: if user was in station_input and forgot '#', finalize it
+      await finalizeStationIfNeeded(s);
+  
+      // 👇 existing behavior
+      if (profile.cabildoCompleted) {
         endSession(s);
+        return;
+      }
+  
+      await sendText(s.waId, [
+        "Cerramos la conversación por inactividad. Si deseas continuar, escribe cualquier mensaje.",
+      ]);
+      endSession(s);
     }, INACTIVITY_MS);
-}
+  }
 
 function remainingStationsUnion(s: Session, p: Profile) {
     const done = new Set<number>([...(p.stationsDone ?? []), ...s.stationsDone]);
